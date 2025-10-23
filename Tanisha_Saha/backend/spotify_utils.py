@@ -1,34 +1,41 @@
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+import torch
+from transformers import BertForSequenceClassification, BertTokenizer
 import pandas as pd
-import random
 
-def create_spotify_client(client_id, client_secret):
-    auth_manager = SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
-    sp = spotipy.Spotify(auth_manager=auth_manager)
-    return sp
+# New 6-emotion mapping
+id2label = {0: "Anger/Frustration", 1: "Fear/Anxiety", 2: "Joy/Positive", 3: "Neutral/Baseline", 4: "Sadness/Grief", 5: "Surprise/Awe"}
 
-def get_track_details(sp, uri):
-    track = sp.track(uri)
-    info = {
-        "name": track["name"],
-        "artist": track["artists"][0]["name"],
-        "album": track["album"]["name"],
-        "url": track["external_urls"]["spotify"]
-    }
-    return info
+# Mapping from 6 emotions to 4 mood categories for songs
+emotion_to_mood = {
+    "Anger/Frustration": "angry",
+    "Fear/Anxiety": "calm", 
+    "Joy/Positive": "happy",
+    "Neutral/Baseline": "calm",
+    "Sadness/Grief": "sad",
+    "Surprise/Awe": "calm"
+}
 
-def load_mood_csv(csv_path):
-    df = pd.read_csv(csv_path)
-    if "uri" in df.columns and "mood" in df.columns:
-        mapping = dict(zip(df["uri"], df["mood"]))
-        return mapping
+def load_model_and_tokenizer(model_path, tokenizer_dir, device=None):
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=6)
+    checkpoint = torch.load(model_path, map_location=device)
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
     else:
-        raise ValueError("CSV must have columns: 'uri' and 'mood'")
+        model.load_state_dict(checkpoint)
+    model.to(device)
+    model.eval()
+    tokenizer = BertTokenizer.from_pretrained(tokenizer_dir)
+    return model, tokenizer, device
 
-def get_random_songs_by_mood(mood_map, emotion, count=5):
-    """Get random song URIs for a specific emotion"""
-    songs_with_emotion = [uri for uri, mood in mood_map.items() if mood == emotion]
-    if len(songs_with_emotion) < count:
-        return songs_with_emotion  # Return all available songs if less than requested
-    return random.sample(songs_with_emotion, count)
+def predict_text(model, tokenizer, device, text, max_length=96):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True,
+                       padding=True, max_length=max_length)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+        pred = torch.argmax(logits, dim=1).cpu().item()
+    emotion = id2label[pred]
+    mood = emotion_to_mood[emotion]
+    return emotion, mood
