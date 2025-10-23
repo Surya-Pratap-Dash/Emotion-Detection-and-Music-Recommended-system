@@ -4,11 +4,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from model_utils import load_model_and_tokenizer, predict_text
-from spotify_utils import create_spotify_client, get_track_details, load_mood_csv, get_random_songs_by_mood
+from spotify_utils import create_spotify_client, get_track_details, load_mood_csv, get_random_songs_by_emotion
 import random
 
 MODEL_PATH = "best_bert_emotion_model.pth"
-TOKENIZER_DIR = "tokenizer"
+TOKENIZER_DIR = "bert_emotion_tokenizer"
 CSV_PATH = "moodify_light.csv"
 
 CLIENT_ID = "90196bf080544bc8b1a40a989b291c03"
@@ -33,14 +33,14 @@ mood_map = load_mood_csv(CSV_PATH)
 
 @app.get("/predict_text/")
 def predict_text_api(sentence: str):
-    emotion = predict_text(model, tokenizer, device, sentence)
-    return {"input": sentence, "predicted_emotion": emotion}
+    emotion, mood = predict_text(model, tokenizer, device, sentence)
+    return {"input": sentence, "predicted_emotion": emotion, "mood_category": mood}
 
 
 @app.get("/recommend_songs/")
 def recommend_songs_api(emotion: str, count: int = 5):
     try:
-        songs = get_random_songs_by_mood(mood_map, emotion, count)
+        songs = get_random_songs_by_emotion(mood_map, emotion, count)
         recommendations = []
         for uri in songs:
             track_details = get_track_details(sp, uri)
