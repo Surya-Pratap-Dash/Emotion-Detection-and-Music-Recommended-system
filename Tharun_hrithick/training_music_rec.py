@@ -1,107 +1,126 @@
 import pandas as pd
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.feature_extraction.text import TfidfVectorizer
+import pickle
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import warnings
 
-try:
-    music_df = pd.read_csv("cleaned_music_sentiment_dataset.csv")
-    print("Music dataset loaded successfully.")
-except FileNotFoundError:
-    print("Error: 'cleaned_music_sentiment_dataset.csv' not found.")
-    exit()
+# Suppress warnings from sklearn
+warnings.filterwarnings('ignore', category=UserWarning)
 
+# --- 1. Configuration ---\
+# --- Paths ---\
+# Input files required for this script
+MUSIC_DATA_PATH = 'cleaned_music_sentiment_dataset.csv'
 
-categorical_cols = ['Genre', 'Mood', 'Energy', 'Danceability', 'Sentiment_Label']
-mappings = {}
+# --- Output Files ---\
+# These are the final files the backend_app.py will use
+OUTPUT_CSV_PATH = 'new_dataset_with_emotions.csv'
+OUTPUT_SIMILARITY_MATRIX_PATH = 'new_dataset_similarity_matrix.npy'
+OUTPUT_INDICES_PATH = 'new_dataset_song_indices.pkl'
+OUTPUT_PLOT_PATH = 'new_dataset_emotion_distribution.png'
 
-for col in categorical_cols:
-    cat_to_int = {cat: i for i, cat in enumerate(music_df[col].unique())}
-    mappings[col] = cat_to_int
-    music_df[f'{col}_encoded'] = music_df[col].map(cat_to_int)
+# --- 2. Main Execution Block ---\
+if __name__ == '__main__':
+    # --- Phase 1: Load and Prepare New Music Data ---\
+    print("\n--- Phase 1: Loading and Preparing Music Data ---")
+    df_music = pd.read_csv(MUSIC_DATA_PATH)
+    
+    # Drop rows where key music/emotion data is missing
+    key_cols = ['User_Text', 'Sentiment_Label', 'Song_Name', 'Artist', 
+                'Genre', 'Tempo (BPM)', 'Mood', 'Energy', 'Danceability']
+    df_music.dropna(subset=key_cols, inplace=True)
+    
+    # Ensure there are no duplicate songs
+    df_music.drop_duplicates(subset=['Song_Name', 'Artist'], inplace=True, keep='first')
+    df_music.reset_index(drop=True, inplace=True)
 
-print("\nCreated integer mappings for all categorical features.")
+    print(f"Loaded and filtered dataset with {len(df_music)} unique songs.")
 
-feature_cols = ['Genre_encoded', 'Mood_encoded', 'Energy_encoded', 'Danceability_encoded']
-target_col = 'Sentiment_Label_encoded'
+    # --- Phase 2: Map Emotion Labels ---
+    print("\n--- Phase 2: Mapping Emotion Labels ---")
+    # This map is useful for encoding the label, but the string label is also needed
+    emotion_map = {'Sad': 0, 'Happy': 1, 'Relaxed': 2, 'Motivated': 3, 'Calm': 4}
+    
+    # We rename 'predicted_emotion' to 'emotion_label_encoded' for clarity.
+    # This is an ENCODING of the *existing label*, not a *prediction*.
+    df_music['emotion_label_encoded'] = df_music['Sentiment_Label'].map(emotion_map)
+    
+    # Save this cleaned-up and encoded dataset
+    df_music.to_csv(OUTPUT_CSV_PATH, index=False)
+    print(f"Saved cleaned dataset with encoded labels to '{OUTPUT_CSV_PATH}'")
 
-X = music_df[feature_cols].values
-y = music_df[target_col].values
+    # --- Phase 3: Visualize Emotion Distribution ---
+    print("\n--- Phase 3: Visualizing Emotion Distribution ---")
+    plt.figure(figsize=(10, 6))
+    df_music['Sentiment_Label'].value_counts().plot(kind='bar', color='green')
+    plt.title('Emotion Distribution from Dataset Labels')
+    plt.xlabel('Emotion (from Sentiment_Label)')
+    plt.ylabel('Number of Songs')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_PLOT_PATH)
+    print(f"Saved emotion distribution plot to '{OUTPUT_PLOT_PATH}'")
 
-class MusicDataset(Dataset):
-    def __init__(self, features, labels):
-        self.features = torch.tensor(features, dtype=torch.float32)
-        self.labels = torch.tensor(labels, dtype=torch.long)
+    # --- Phase 4: Build Content-Based Recommendation Engine ---
+    print("\n--- Phase 4: Building Content-Based Recommendation Engine ---")
+    print("This is the new, improved method.")
 
-    def __len__(self):
-        return len(self.features)
+    # 1. Process Numerical Features
+    print("Processing numerical and ordinal features...")
+    scaler = MinMaxScaler()
+    numerical_features = pd.DataFrame(
+        scaler.fit_transform(df_music[['Tempo (BPM)']]), 
+        columns=['Tempo_Scaled']
+    )
+    
+    # 2. Process Ordinal Features (Low, Medium, High)
+    ordinal_map = {'Low': 0, 'Medium': 1, 'High': 2}
+    ordinal_features = pd.DataFrame({
+        'Energy_Scaled': df_music['Energy'].map(ordinal_map).fillna(1), # Fill NaNs with 'Medium'
+        'Danceability_Scaled': df_music['Danceability'].map(ordinal_map).fillna(1)
+    })
+    # Scale ordinal features as well
+    ordinal_features = pd.DataFrame(
+        scaler.fit_transform(ordinal_features),
+        columns=ordinal_features.columns
+    )
 
-    def __getitem__(self, idx):
-        return self.features[idx], self.labels[idx]
+    # 3. Process Categorical Features (One-Hot Encoding)
+    print("Processing categorical features (Genre, Mood, Sentiment)...")
+    genre_features = pd.get_dummies(df_music['Genre'], prefix='genre')
+    mood_features = pd.get_dummies(df_music['Mood'], prefix='mood')
+    sentiment_features = pd.get_dummies(df_music['Sentiment_Label'], prefix='sentiment')
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    # 4. Combine all features into one matrix
+    print("Combining all features into final matrix...")
+    features_df = pd.concat([
+        numerical_features,
+        ordinal_features,
+        genre_features,
+        mood_features,
+        sentiment_features
+    ], axis=1)
 
-train_dataset = MusicDataset(X_train, y_train)
-test_dataset = MusicDataset(X_test, y_test)
+    print(f"Created feature matrix with shape: {features_df.shape}")
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-print("Created PyTorch DataLoaders.")
-
-class MusicRecommendationModel(nn.Module):
-    def __init__(self, input_size, num_classes):
-        super(MusicRecommendationModel, self).__init__()
-        self.layer_1 = nn.Linear(input_size, 64)
-        self.layer_2 = nn.Linear(64, 32)
-        self.output_layer = nn.Linear(32, num_classes)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x = self.relu(self.layer_1(x))
-        x = self.relu(self.layer_2(x))
-        x = self.output_layer(x)
-        return x
-
-INPUT_SIZE = len(feature_cols)
-NUM_CLASSES = len(mappings['Sentiment_Label'])
-MODEL_SAVE_PATH = 'music_recommendation_pytorch.pth'
-
-model = MusicRecommendationModel(INPUT_SIZE, NUM_CLASSES)
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-print("\nStarting model training...")
-for epoch in range(25): 
-    for features, labels in train_loader:
-        optimizer.zero_grad()
-        outputs = model(features)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-    if (epoch + 1) % 5 == 0:
-        print(f'Epoch [{epoch+1}/25], Loss: {loss.item():.4f}')
-print("Model training complete.")
-
-model.eval()
-all_preds = []
-all_labels = []
-with torch.no_grad():
-    for features, labels in test_loader:
-        outputs = model(features)
-        _, predicted = torch.max(outputs.data, 1)
-        all_preds.extend(predicted.numpy())
-        all_labels.extend(labels.numpy())
-
-accuracy = accuracy_score(all_labels, all_preds)
-print(f"\nModel Accuracy: {accuracy * 100:.2f}%")
-print(f"Mapping Percentage: {accuracy * 100:.2f}%")
-
-
-torch.save({
-    'model_state_dict': model.state_dict(),
-    'mappings': mappings,
-}, MODEL_SAVE_PATH)
-print(f"\n  → Single model file saved to '{MODEL_SAVE_PATH}'")
+    # 5. Calculate Cosine Similarity
+    # This matrix is built from *music features*, not User_Text
+    print("Calculating cosine similarity matrix based on content features...")
+    cosine_sim = cosine_similarity(features_df, features_df)
+    
+    # 6. Save the similarity matrix
+    np.save(OUTPUT_SIMILARITY_MATRIX_PATH, cosine_sim)
+    print(f"Saved new similarity matrix to '{OUTPUT_SIMILARITY_MATRIX_PATH}'")
+    
+    # 7. Create and save the series for song title-to-index mapping (this is the same)
+    indices = pd.Series(df_music.index, index=df_music['Song_Name']).drop_duplicates()
+    with open(OUTPUT_INDICES_PATH, 'wb') as f:
+        pickle.dump(indices, f)
+    print(f"Saved song indices to '{OUTPUT_INDICES_PATH}'")
+    
+    print("\n--- All processing complete! ---")
+    print("The new files are now ready for your backend application.")
