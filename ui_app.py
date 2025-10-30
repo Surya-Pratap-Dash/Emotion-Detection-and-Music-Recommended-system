@@ -8,7 +8,6 @@ from PIL import Image
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import av
 import time
-import traceback
 
 # --- App Configuration ---
 st.set_page_config(
@@ -17,11 +16,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 1. STYLISH UI: Custom CSS for Glassmorphism & Background ---
+# --- 1. STYLISH UI: Custom CSS (Same as before) ---
 def load_css():
     st.markdown(
         """
         <style>
+        /* ... (The full CSS from the previous step goes here) ... */
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap');
         html, body, [data-testid="stApp"] {
             font-family: 'Montserrat', sans-serif;
@@ -30,6 +30,7 @@ def load_css():
             background-size: cover;
             background-repeat: no-repeat;
             background-attachment: fixed;
+            color: #FFFFFF;
         }
         h1, h2, h3, h4, h5, h6, [data-testid="stMarkdownContainer"] p, .st-emotion-cache-1jicfl2 {
             color: #FFFFFF !important;
@@ -47,7 +48,7 @@ def load_css():
             background-color: rgba(0, 150, 0, 0.7);
             backdrop-filter: blur(10px);
             border-radius: 10px;
-            padding: 10px 20px;
+            padding: 15px 25px;
             border: 1px solid rgba(0, 255, 0, 0.2);
             text-align: center;
         }
@@ -55,33 +56,27 @@ def load_css():
             color: #FFFFFF;
             font-weight: 700;
             margin: 0;
+            font-size: 1.75rem; /* Slightly smaller to fit text */
         }
-        [data-testid="stTabs"] { background: none; }
-        [data-testid="stTabs"] button { color: #ADADAD; font-size: 1.1rem; }
+        [data-testid="stTabs"] button {
+            color: #ADADAD;
+            font-size: 1.1rem;
+        }
         [data-testid="stTabs"] button[aria-selected="true"] {
-            color: #FFFFFF; font-weight: 700; border-bottom: 3px solid #00A36C;
+            color: #FFFFFF;
+            font-weight: 700;
+            border-bottom: 3px solid #00A36C;
         }
         [data-testid="stFileUploader"] label {
             background-color: rgba(255, 255, 255, 0.1);
             border: 1px dashed rgba(255, 255, 255, 0.4);
             color: #FFFFFF;
-            border-radius: 10px;
-        }
-        [data-testid="stFileUploader"] label:hover {
-            border-color: #00A36C;
-            color: #00A36C;
         }
         .stButton button {
             background-color: #00A36C;
             color: white;
             font-weight: 600;
             border-radius: 10px;
-            border: none;
-            padding: 10px 20px;
-        }
-        .stButton button:hover {
-            background-color: #008256;
-            color: white;
         }
         </style>
         """,
@@ -89,7 +84,7 @@ def load_css():
     )
 
 # --- File Paths and Constants ---
-MODEL_PATH = 'final_tuned_vgg16_model.h5'
+MODEL_PATH = 'models/final_tuned_vgg16_model.h5'
 HAAR_CASCADE_PATH = 'haarcascade_frontalface_default.xml'
 EMOTION_MAP = {0: 'angry', 1: 'disgust', 2: 'fear', 3: 'happy', 4: 'sad', 5: 'surprise', 6: 'neutral'}
 
@@ -135,46 +130,11 @@ SONG_DATABASE = {
 # --- Caching Models ---
 @st.cache_resource
 def load_emotion_model():
-    """Try to load the model normally. If deserialization of Lambda raises a safety error,
-    attempt loading with safe_mode=False, and as a last resort try enabling keras unsafe deserialization."""
-    if not os.path.exists(MODEL_PATH):
-        st.error(f"🔴 Model file not found at '{MODEL_PATH}'. Please ensure the .h5 file is in the project folder.")
-        return None
-
     try:
         model = tf.keras.models.load_model(MODEL_PATH)
-        st.success(f"✅ Emotion model loaded successfully from '{MODEL_PATH}'.")
         return model
     except Exception as e:
-        # Check for Lambda-layer / unsafe deserialization message
-        msg = str(e).lower()
-        st.warning(f"⚠️ Initial model load failed: {e}")
-        try:
-            # Try loading with safe_mode=False (recommended by the error message)
-            st.info("Attempting to load model with safe_mode=False (allow Lambda layers)...")
-            model = tf.keras.models.load_model(MODEL_PATH, safe_mode=False)
-            st.success("✅ Model loaded using safe_mode=False.")
-            return model
-        except Exception as e2:
-            st.warning(f"⚠️ Loading with safe_mode=False also failed: {e2}")
-            # As a last resort, try to enable unsafe deserialization via keras.config if available
-            try:
-                import keras as _keras  # standalone keras (if installed)
-                if hasattr(_keras, "config") and hasattr(_keras.config, "enable_unsafe_deserialization"):
-                    st.info("Enabling keras.config.enable_unsafe_deserialization() and retrying load...")
-                    _keras.config.enable_unsafe_deserialization()
-                    model = tf.keras.models.load_model(MODEL_PATH)
-                    st.success("✅ Model loaded after enabling keras unsafe deserialization.")
-                    return model
-            except Exception as e3:
-                # give helpful debug output
-                st.error("🔴 Failed to enable keras unsafe deserialization or load the model after that.")
-                st.error(f"Details: {e3}")
-                traceback.print_exc()
-
-        # If all attempts fail, report the last exception
-        st.error("🔴 Could not load the emotion model. If the model contains custom layers or lambdas, "
-                 "ensure you trust the file and consider using safe_mode=False or re-saving the model without lambdas.")
+        st.error(f"🔴 Error loading emotion model: {e}")
         return None
 
 @st.cache_resource
@@ -189,18 +149,17 @@ def load_face_detector():
         st.error(f"🔴 Error loading Haar Cascade: {e}")
         return None
 
-# --- 2. INTERACTIVE FEATURE: YouTube Links ---
+# --- Backend Functions ---
 @st.cache_data
 def recommend_songs(emotion, num_recommendations=3):
+    """Recommends songs and adds YouTube search links."""
     song_list = SONG_DATABASE.get(emotion, SONG_DATABASE['neutral'])
-    # safe sample if fewer songs than requested
-    n = min(num_recommendations, len(song_list))
-    playlist_df = pd.DataFrame(song_list).sample(n=n)
-
+    playlist_df = pd.DataFrame(song_list).sample(n=num_recommendations)
+    
     def create_youtube_link(row):
         query = f"{row['artist_name']} {row['title']}".replace(" ", "+")
         return f"<a href='https://www.youtube.com/results?search_query={query}' target='_blank' style='color: #00A36C; text-decoration: none;'>Listen ▷</a>"
-
+        
     playlist_df['Listen'] = playlist_df.apply(create_youtube_link, axis=1)
     return playlist_df
 
@@ -209,7 +168,8 @@ class EmotionVideoTransformer(VideoTransformerBase):
     def __init__(self):
         self.face_cascade = load_face_detector()
         self.emotion_model = load_emotion_model()
-        self.current_emotion = "neutral"
+        self.current_emotion = "neutral" 
+        self.current_confidence = 0.0  # --- NEW: Store confidence score ---
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         if self.face_cascade is None or self.emotion_model is None:
@@ -218,36 +178,40 @@ class EmotionVideoTransformer(VideoTransformerBase):
         img = frame.to_ndarray(format="bgr24")
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
+        
         if len(faces) > 0:
             (x, y, w, h) = faces[0]
             cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            roi_gray = gray[y:y+h, x:x+w].copy()
-            try:
-                roi_gray = cv2.resize(roi_gray, (48, 48))
-                roi_norm = roi_gray / 255.0
-                roi_3ch = np.repeat(np.expand_dims(roi_norm, axis=-1), 3, axis=-1)
-                roi_final = np.expand_dims(roi_3ch, axis=0)
-                prediction = self.emotion_model.predict(roi_final, verbose=0)
-                emotion_index = np.argmax(prediction)
-                self.current_emotion = EMOTION_MAP.get(emotion_index, "Unknown")
-                cv2.putText(img, self.current_emotion, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-            except Exception as ex:
-                # If something goes wrong during prediction, keep going gracefully
-                self.current_emotion = "neutral"
-                print("Prediction failed:", ex)
+            roi_gray = gray[y:y+h, x:x+w]
+            roi_gray = cv2.resize(roi_gray, (48, 48))
+            
+            roi_norm = roi_gray / 255.0
+            roi_3ch = np.repeat(np.expand_dims(roi_norm, axis=-1), 3, axis=-1)
+            roi_final = np.expand_dims(roi_3ch, axis=0)
+            
+            # --- NEW: Get full prediction and confidence ---
+            prediction = self.emotion_model.predict(roi_final, verbose=0)
+            self.current_confidence = np.max(prediction)
+            emotion_index = np.argmax(prediction)
+            self.current_emotion = EMOTION_MAP.get(emotion_index, "Unknown")
+            
+            # --- NEW: Update text to include confidence ---
+            text = f"{self.current_emotion} ({self.current_confidence * 100:.0f}%)"
+            cv2.putText(img, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
         else:
             self.current_emotion = "neutral"
+            self.current_confidence = 0.0
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # --- Streamlit UI ---
-load_css()
+
+load_css() # Load the custom styles
 
 st.title("🎵 MoodMate | Emotion-Based Music Recommender")
 st.markdown("Your personal DJ that curates a playlist based on your facial expression.")
 
-tab1, tab2 = st.tabs(["📁 Upload an Image", "📷 Live Webcam Detection"])
+tab1, tab2 = st.tabs(["📁 **Upload an Image**", "📷 **Live Webcam Detection**"])
 
 # --- Tab 1: Upload an Image ---
 with tab1:
@@ -257,8 +221,7 @@ with tab1:
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        # updated parameter name to use_container_width
-        st.image(image, caption='Uploaded Image.', use_container_width=True)
+        st.image(image, caption='Uploaded Image.', use_column_width=True)
         image_np = np.array(image)
 
         with st.spinner('Analyzing emotion and curating your playlist...'):
@@ -268,35 +231,33 @@ with tab1:
                     gray_img = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
                 else:
                     gray_img = image_np
-
+                
                 img_resized = cv2.resize(gray_img, (48, 48))
                 img_normalized = img_resized / 255.0
                 img_3_channel = np.repeat(np.expand_dims(img_normalized, axis=-1), 3, axis=-1)
                 img_final = np.expand_dims(img_3_channel, axis=0)
+                
+                # --- NEW: Get prediction and confidence ---
+                prediction = emotion_model.predict(img_final, verbose=0)
+                confidence = np.max(prediction)
+                emotion_index = np.argmax(prediction)
+                detected_emotion = EMOTION_MAP.get(emotion_index, "Unknown")
+                confidence_percent = confidence * 100
+                
+                # --- NEW: Update styled box to show confidence ---
+                st.markdown(f'<div class="emotion-box"><h2>{detected_emotion.upper()} ({confidence_percent:.0f}%)</h2></div>', unsafe_allow_html=True)
+                
+                if detected_emotion == 'happy':
+                    st.balloons()
 
-                try:
-                    prediction = emotion_model.predict(img_final, verbose=0)
-                    emotion_index = np.argmax(prediction)
-                    detected_emotion = EMOTION_MAP.get(emotion_index, "Unknown")
-
-                    st.markdown(f'<div class="emotion-box"><h2>Emotion Detected: {detected_emotion.upper()}</h2></div>', unsafe_allow_html=True)
-
-                    if detected_emotion == 'happy':
-                        st.balloons()
-
-                    playlist = recommend_songs(detected_emotion)
-
-                    if not playlist.empty:
-                        st.header("🎶 Here's Your Personalized Playlist:")
-                        st.markdown(
-                            playlist[['artist_name', 'title', 'Listen']].to_html(escape=False, index=False),
-                            unsafe_allow_html=True
-                        )
-                except Exception as ex:
-                    st.error("🔴 Error during prediction. See console for details.")
-                    print("Prediction error:", ex)
-                    traceback.print_exc()
-
+                playlist = recommend_songs(detected_emotion)
+                
+                if not playlist.empty:
+                    st.header("🎶 Here's Your Personalized Playlist:")
+                    st.markdown(
+                        playlist[['artist_name', 'title', 'Listen']].to_html(escape=False, index=False),
+                        unsafe_allow_html=True
+                    )
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- Tab 2: Live Webcam Detection ---
@@ -304,7 +265,7 @@ with tab2:
     st.header("Live Emotion Playlist Generator")
     st.info("Click 'Start' to activate your webcam. Your playlist will update in real-time below!")
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([2, 1]) 
 
     with col1:
         st.markdown('<div class="glass-container">', unsafe_allow_html=True)
@@ -320,34 +281,33 @@ with tab2:
         st.markdown('<div class="glass-container">', unsafe_allow_html=True)
         st.header("🎶 Your Live Playlist")
         playlist_placeholder = st.empty()
-
+        
         if 'last_emotion' not in st.session_state:
             st.session_state.last_emotion = 'neutral'
 
-        try:
-            while ctx.state.playing:
-                if ctx.video_transformer:
-                    current_emotion = ctx.video_transformer.current_emotion
-
-                    if current_emotion != st.session_state.last_emotion:
-                        st.session_state.last_emotion = current_emotion
-
-                        if current_emotion == 'happy':
-                            st.balloons()
-
-                        playlist = recommend_songs(current_emotion)
-
-                        with playlist_placeholder.container():
-                            st.markdown(f'<div class="emotion-box" style="background-color: rgba(0, 100, 150, 0.7);"><h2>{current_emotion.upper()}</h2></div>', unsafe_allow_html=True)
-                            st.markdown(
-                                playlist[['artist_name', 'title', 'Listen']].to_html(escape=False, index=False),
-                                unsafe_allow_html=True
-                            )
-
-                time.sleep(1)
-        except Exception as ex:
-            # If stream stops or throws, show a message but don't crash the app
-            st.info("Webcam stopped or encountered an issue.")
-            print("Webcam loop error:", ex)
-
+        while ctx.state.playing:
+            if ctx.video_transformer:
+                # --- NEW: Get both emotion and confidence ---
+                current_emotion = ctx.video_transformer.current_emotion
+                current_confidence = ctx.video_transformer.current_confidence
+                
+                if current_emotion != st.session_state.last_emotion:
+                    st.session_state.last_emotion = current_emotion
+                    
+                    if current_emotion == 'happy':
+                        st.balloons()
+                    
+                    playlist = recommend_songs(current_emotion)
+                    
+                    with playlist_placeholder.container():
+                        # --- NEW: Update styled box to show confidence ---
+                        confidence_percent = current_confidence * 100
+                        st.markdown(f'<div class="emotion-box" style="background-color: rgba(0, 100, 150, 0.7);"><h2>{current_emotion.upper()} ({confidence_percent:.0f}%)</h2></div>', unsafe_allow_html=True)
+                        st.markdown(
+                            playlist[['artist_name', 'title', 'Listen']].to_html(escape=False, index=False),
+                            unsafe_allow_html=True
+                        )
+                
+            time.sleep(1) 
+        
         st.markdown('</div>', unsafe_allow_html=True)
