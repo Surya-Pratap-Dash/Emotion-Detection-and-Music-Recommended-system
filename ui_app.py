@@ -10,104 +10,74 @@ import av
 import time
 
 # --- App Configuration ---
-# Use the "wide" layout to give our app more space
 st.set_page_config(
     page_title="MoodMate | Music Recommender",
     page_icon="🎵",
     layout="wide"
 )
 
-# --- 1. STYLISH UI: Custom CSS for Glassmorphism & Background ---
-
+# --- 1. STYLISH UI: Custom CSS (Same as before) ---
 def load_css():
     st.markdown(
         """
         <style>
-        /* Import a cool font */
+        /* ... (The full CSS from the previous step goes here) ... */
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap');
-
         html, body, [data-testid="stApp"] {
             font-family: 'Montserrat', sans-serif;
-            /* Dark abstract background */
             background-image: linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)),
                               url("https://images.unsplash.com/photo-1506269996136-39e3831A335c?auto=format&fit=crop&q=80");
             background-size: cover;
             background-repeat: no-repeat;
             background-attachment: fixed;
+            color: #FFFFFF;
         }
-
-        /* Make all text white for contrast */
         h1, h2, h3, h4, h5, h6, [data-testid="stMarkdownContainer"] p, .st-emotion-cache-1jicfl2 {
             color: #FFFFFF !important;
         }
-
-        /* Style for the main "glass" containers */
         .glass-container {
-            background-color: rgba(40, 40, 40, 0.6); /* Semi-transparent black */
-            backdrop-filter: blur(10px); /* The "frosted glass" effect */
+            background-color: rgba(40, 40, 40, 0.6);
+            backdrop-filter: blur(10px);
             border-radius: 20px;
             padding: 30px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
             margin-bottom: 20px;
         }
-
-        /* Style for the emotion result box */
         .emotion-box {
-            background-color: rgba(0, 150, 0, 0.7); /* Greenish glass */
+            background-color: rgba(0, 150, 0, 0.7);
             backdrop-filter: blur(10px);
             border-radius: 10px;
-            padding: 10px 20px;
+            padding: 15px 25px;
             border: 1px solid rgba(0, 255, 0, 0.2);
             text-align: center;
         }
-        
         .emotion-box h2 {
             color: #FFFFFF;
             font-weight: 700;
             margin: 0;
-        }
-
-        /* Style the tabs */
-        [data-testid="stTabs"] {
-            background: none;
+            font-size: 1.75rem; /* Slightly smaller to fit text */
         }
         [data-testid="stTabs"] button {
-            color: #ADADAD; /* Greyed out */
+            color: #ADADAD;
             font-size: 1.1rem;
         }
         [data-testid="stTabs"] button[aria-selected="true"] {
-            color: #FFFFFF; /* White and bold when selected */
+            color: #FFFFFF;
             font-weight: 700;
             border-bottom: 3px solid #00A36C;
         }
-
-        /* Style the file uploader button */
         [data-testid="stFileUploader"] label {
             background-color: rgba(255, 255, 255, 0.1);
             border: 1px dashed rgba(255, 255, 255, 0.4);
             color: #FFFFFF;
-            border-radius: 10px;
         }
-        [data-testid="stFileUploader"] label:hover {
-            border-color: #00A36C;
-            color: #00A36C;
-        }
-        
-        /* Style the webcam 'Start' button */
         .stButton button {
             background-color: #00A36C;
             color: white;
             font-weight: 600;
             border-radius: 10px;
-            border: none;
-            padding: 10px 20px;
         }
-        .stButton button:hover {
-            background-color: #008256;
-            color: white;
-        }
-
         </style>
         """,
         unsafe_allow_html=True
@@ -179,7 +149,7 @@ def load_face_detector():
         st.error(f"🔴 Error loading Haar Cascade: {e}")
         return None
 
-# --- 2. INTERACTIVE FEATURE: YouTube Links ---
+# --- Backend Functions ---
 @st.cache_data
 def recommend_songs(emotion, num_recommendations=3):
     """Recommends songs and adds YouTube search links."""
@@ -199,6 +169,7 @@ class EmotionVideoTransformer(VideoTransformerBase):
         self.face_cascade = load_face_detector()
         self.emotion_model = load_emotion_model()
         self.current_emotion = "neutral" 
+        self.current_confidence = 0.0  # --- NEW: Store confidence score ---
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         if self.face_cascade is None or self.emotion_model is None:
@@ -218,31 +189,33 @@ class EmotionVideoTransformer(VideoTransformerBase):
             roi_3ch = np.repeat(np.expand_dims(roi_norm, axis=-1), 3, axis=-1)
             roi_final = np.expand_dims(roi_3ch, axis=0)
             
+            # --- NEW: Get full prediction and confidence ---
             prediction = self.emotion_model.predict(roi_final, verbose=0)
+            self.current_confidence = np.max(prediction)
             emotion_index = np.argmax(prediction)
             self.current_emotion = EMOTION_MAP.get(emotion_index, "Unknown")
             
-            cv2.putText(img, self.current_emotion, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            # --- NEW: Update text to include confidence ---
+            text = f"{self.current_emotion} ({self.current_confidence * 100:.0f}%)"
+            cv2.putText(img, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
         else:
             self.current_emotion = "neutral"
+            self.current_confidence = 0.0
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # --- Streamlit UI ---
 
-# Load the custom CSS
-load_css()
+load_css() # Load the custom styles
 
 st.title("🎵 MoodMate | Emotion-Based Music Recommender")
 st.markdown("Your personal DJ that curates a playlist based on your facial expression.")
 
-tab1, tab2 = st.tabs(["📁 Upload an Image", "📷 Live Webcam Detection"])
+tab1, tab2 = st.tabs(["📁 **Upload an Image**", "📷 **Live Webcam Detection**"])
 
 # --- Tab 1: Upload an Image ---
 with tab1:
-    # Use st.markdown to apply the custom glass-container class
     st.markdown('<div class="glass-container">', unsafe_allow_html=True)
-    
     st.header("Get a Playlist from an Image")
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
@@ -264,12 +237,15 @@ with tab1:
                 img_3_channel = np.repeat(np.expand_dims(img_normalized, axis=-1), 3, axis=-1)
                 img_final = np.expand_dims(img_3_channel, axis=0)
                 
+                # --- NEW: Get prediction and confidence ---
                 prediction = emotion_model.predict(img_final, verbose=0)
+                confidence = np.max(prediction)
                 emotion_index = np.argmax(prediction)
                 detected_emotion = EMOTION_MAP.get(emotion_index, "Unknown")
+                confidence_percent = confidence * 100
                 
-                # --- 3. STYLISH UI: Custom styled emotion box ---
-                st.markdown(f'<div class="emotion-box"><h2>Emotion Detected: {detected_emotion.upper()}</h2></div>', unsafe_allow_html=True)
+                # --- NEW: Update styled box to show confidence ---
+                st.markdown(f'<div class="emotion-box"><h2>{detected_emotion.upper()} ({confidence_percent:.0f}%)</h2></div>', unsafe_allow_html=True)
                 
                 if detected_emotion == 'happy':
                     st.balloons()
@@ -278,20 +254,18 @@ with tab1:
                 
                 if not playlist.empty:
                     st.header("🎶 Here's Your Personalized Playlist:")
-                    # --- 4. INTERACTIVE FEATURE: Render table with clickable HTML links ---
                     st.markdown(
                         playlist[['artist_name', 'title', 'Listen']].to_html(escape=False, index=False),
                         unsafe_allow_html=True
                     )
-    
-    st.markdown('</div>', unsafe_allow_html=True) # Close the glass-container
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # --- Tab 2: Live Webcam Detection ---
 with tab2:
     st.header("Live Emotion Playlist Generator")
     st.info("Click 'Start' to activate your webcam. Your playlist will update in real-time below!")
 
-    col1, col2 = st.columns([2, 1]) # Give webcam more space
+    col1, col2 = st.columns([2, 1]) 
 
     with col1:
         st.markdown('<div class="glass-container">', unsafe_allow_html=True)
@@ -313,7 +287,9 @@ with tab2:
 
         while ctx.state.playing:
             if ctx.video_transformer:
+                # --- NEW: Get both emotion and confidence ---
                 current_emotion = ctx.video_transformer.current_emotion
+                current_confidence = ctx.video_transformer.current_confidence
                 
                 if current_emotion != st.session_state.last_emotion:
                     st.session_state.last_emotion = current_emotion
@@ -324,12 +300,14 @@ with tab2:
                     playlist = recommend_songs(current_emotion)
                     
                     with playlist_placeholder.container():
-                        st.markdown(f'<div class="emotion-box" style="background-color: rgba(0, 100, 150, 0.7);"><h2>{current_emotion.upper()}</h2></div>', unsafe_allow_html=True)
+                        # --- NEW: Update styled box to show confidence ---
+                        confidence_percent = current_confidence * 100
+                        st.markdown(f'<div class="emotion-box" style="background-color: rgba(0, 100, 150, 0.7);"><h2>{current_emotion.upper()} ({confidence_percent:.0f}%)</h2></div>', unsafe_allow_html=True)
                         st.markdown(
                             playlist[['artist_name', 'title', 'Listen']].to_html(escape=False, index=False),
                             unsafe_allow_html=True
                         )
                 
-            time.sleep(1) # Refresh every second
+            time.sleep(1) 
         
         st.markdown('</div>', unsafe_allow_html=True)
